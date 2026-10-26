@@ -110,3 +110,10 @@ class ChangePasswordSerializer(serializers.Serializer):
         except DjangoValidationError as error:
             raise serializers.ValidationError(list(error.messages))
         return value
+
+class SearchResultSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category.name", read_only=True)
+
+    class Meta:
+        model = Dish
+        fields = ["id", "restaurant", "name", "photo", "category", "category_name"]

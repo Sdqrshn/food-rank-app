@@ -2,11 +2,12 @@ from django.shortcuts import render
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.db import connection
+from django.db.models import Q
 from rest_framework import viewsets
 from .models import Category, Dish
 from .serializers import (
     CategorySerializer, DishSerializer, SignupSerializer, LoginSerializer,
-    ProfileSerializer, ChangePasswordSerializer,
+    ProfileSerializer, ChangePasswordSerializer, SearchResultSerializer,
 )
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, action, permission_classes
@@ -157,3 +158,20 @@ def health(request):
     with connection.cursor() as cursor:
         cursor.execute("SELECT 1")
     return Response({"ok": True})
+
+@api_view(["GET"])
+def search(request):
+    q = request.query_params.get("q", "").strip()
+    if not q:
+        return Response([])
+    dishes = (
+        Dish.objects.filter(category__owner=request.user)
+        .filter(
+            Q(restaurant__icontains=q)
+            | Q(name__icontains=q)
+            | Q(note__icontains=q)
+            | Q(category__name__icontains=q)
+        )
+        .select_related("category")[:50]
+    )
+    return Response(SearchResultSerializer(dishes, many=True, context={"request": request}).data)
