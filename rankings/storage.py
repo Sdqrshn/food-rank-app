@@ -16,7 +16,9 @@ class CloudinaryStorage(Storage):
         return False
 
     def url(self, name):
-        return cloudinary.utils.cloudinary_url(name, secure=True)[0]
+        return cloudinary.utils.cloudinary_url(
+            name, secure=True, width=1000, crop="limit", quality="auto", fetch_format="auto"
+        )[0]
 
     def delete(self, name):
         cloudinary.uploader.destroy(name.rsplit(".", 1)[0])

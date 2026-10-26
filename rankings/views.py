@@ -1,6 +1,7 @@
 from django.shortcuts import render
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.db import connection
 from rest_framework import viewsets
 from .models import Category, Dish
 from .serializers import (
@@ -148,4 +149,11 @@ def delete_account(request):
     if not request.user.check_password(password):
         return Response({"password": ["Incorrect password."]}, status=400)
     request.user.delete()
+    return Response({"ok": True})
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def health(request):
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT 1")
     return Response({"ok": True})
