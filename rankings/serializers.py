@@ -1,6 +1,7 @@
 from django.contrib.auth import password_validation
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError as DjangoValidationError
+from urllib.parse import quote
 
 from rest_framework import serializers
 from .models import Category, Dish, RankHistory
@@ -52,7 +53,7 @@ class DishSerializer(serializers.ModelSerializer):
         model = Dish
         fields = ["id", "category", "name", "restaurant", "price", "note",
                   "date_tried", "map_link", "photo", "elo", "created_at",
-                  "rank", "total", "history"]
+                  "rank", "total", "history", "place_id"]
         read_only_fields = ["elo", "created_at"]
 
     def get_rank(self, obj):
@@ -66,6 +67,16 @@ class DishSerializer(serializers.ModelSerializer):
         if value.owner_id != self.context["request"].user.id:
             raise serializers.ValidationError("That category is not yours.")
         return value
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not data.get("map_link") and instance.place_id:
+            data["map_link"] = (
+                "https://www.google.com/maps/search/?api=1"
+                f"&query={quote(instance.restaurant)}&query_place_id={instance.place_id}"
+            )
+        return data
+    
 
 class SignupSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -111,9 +122,27 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise serializers.ValidationError(list(error.messages))
         return value
 
+def make_snippet(text, query, radius=22):
+    index = text.lower().find(query.lower()) if query else -1
+    if index == -1:
+        return ""
+    start = max(0, index - radius)
+    end = min(len(text), index + len(query) + radius)
+    snippet = text[start:end].strip()
+    if start > 0:
+        snippet = "…" + snippet
+    if end < len(text):
+        snippet = snippet + "…"
+    return snippet
+
+
 class SearchResultSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.name", read_only=True)
+    note_snippet = serializers.SerializerMethodField()
 
     class Meta:
         model = Dish
-        fields = ["id", "restaurant", "name", "photo", "category", "category_name"]
+        fields = ["id", "restaurant", "name", "photo", "category", "category_name", "note_snippet"]
+
+    def get_note_snippet(self, obj):
+        return make_snippet(obj.note, self.context.get("q", ""))

@@ -17,4 +17,5 @@ urlpatterns = [
     path("auth/delete-account/", views.delete_account),\
     path("health/", views.health),
     path("search/", views.search),
+    path("places/autocomplete/", views.place_suggestions),
 ]

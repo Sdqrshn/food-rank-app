@@ -29,6 +29,7 @@ class Dish(models.Model):
     note = models.TextField(blank=True)
     date_tried = models.DateField(default=date.today)
     map_link = models.URLField(blank=True)
+    place_id = models.CharField(max_length=255, blank=True)
     photo = models.ImageField(upload_to="dishes/", null=True, blank=True)
     elo = models.FloatField(default=1500)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -51,3 +52,7 @@ class RankHistory(models.Model):
 def delete_dish_photo(sender, instance, **kwargs):
     if instance.photo:
         instance.photo.delete(save=False)
+
+class PlacesUsage(models.Model):
+    day = models.DateField(unique=True)
+    count = models.PositiveIntegerField(default=0)

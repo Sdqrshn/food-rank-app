@@ -4,7 +4,8 @@ from django.contrib.auth.models import User
 from django.db import connection
 from django.db.models import Q
 from rest_framework import viewsets
-from .models import Category, Dish
+from .models import Category, Dish, PlacesUsage
+from django.db.models import F
 from .serializers import (
     CategorySerializer, DishSerializer, SignupSerializer, LoginSerializer,
     ProfileSerializer, ChangePasswordSerializer, SearchResultSerializer,
@@ -14,6 +15,9 @@ from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from . import placing
+import os
+import requests
+from django.utils import timezone
 
 # Create your views here.
 @api_view(["GET"])
@@ -163,15 +167,62 @@ def health(request):
 def search(request):
     q = request.query_params.get("q", "").strip()
     if not q:
-        return Response([])
+        return Response({"categories": [], "dishes": []})
+    categories = Category.objects.filter(owner=request.user, name__icontains=q)[:10]
     dishes = (
         Dish.objects.filter(category__owner=request.user)
-        .filter(
-            Q(restaurant__icontains=q)
-            | Q(name__icontains=q)
-            | Q(note__icontains=q)
-            | Q(category__name__icontains=q)
-        )
+        .filter(Q(restaurant__icontains=q) | Q(name__icontains=q) | Q(note__icontains=q))
         .select_related("category")[:50]
     )
-    return Response(SearchResultSerializer(dishes, many=True, context={"request": request}).data)
+    context = {"request": request, "q": q}
+    return Response({
+        "categories": CategorySerializer(categories, many=True, context=context).data,
+        "dishes": SearchResultSerializer(dishes, many=True, context=context).data,
+    })
+
+PLACES_URL = "https://places.googleapis.com/v1/places:autocomplete"
+
+def allow_lookup():
+    limit = int(os.environ.get("PLACES_DAILY_LIMIT", "100"))
+    usage, _ = PlacesUsage.objects.get_or_create(day=timezone.localdate())
+    updated = PlacesUsage.objects.filter(pk=usage.pk, count__lt=limit).update(count=F("count") + 1)
+    return updated == 1
+
+@api_view(["GET"])
+def place_suggestions(request):
+    q = request.query_params.get("q", "").strip()
+    key = os.environ.get("GOOGLE_PLACES_API_KEY")
+    if len(q) < 3 or not key:
+        return Response([])
+
+    if not allow_lookup():
+        return Response([])
+
+    try:
+        res = requests.post(
+            PLACES_URL,
+            json={
+                "input": q,
+                "languageCode": "en",
+                "includedRegionCodes": ["in"],
+                "includedPrimaryTypes": ["restaurant", "cafe", "bakery", "meal_takeaway", "fast_food_restaurant"],
+            },
+            headers={"X-Goog-Api-Key": key},
+            timeout=5,
+        )
+        res.raise_for_status()
+    except requests.RequestException:
+        return Response([])
+
+    items = []
+    for suggestion in res.json().get("suggestions", []):
+        prediction = suggestion.get("placePrediction")
+        if not prediction:
+            continue
+        text = prediction.get("structuredFormat", {})
+        items.append({
+            "place_id": prediction.get("placeId", ""),
+            "name": text.get("mainText", {}).get("text", ""),
+            "address": text.get("secondaryText", {}).get("text", ""),
+        })
+    return Response(items[:5])
