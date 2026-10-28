@@ -34,3 +34,18 @@ def record_ranks(category):
         last = dish.history.last()
         if last is None or last.rank != position:
             RankHistory.objects.create(dish=dish, rank=position)
+
+def move_dish(dish, position):
+    others = list(dish.category.dishes.exclude(pk=dish.pk))
+    position = max(0, min(position, len(others)))
+    new_score = score_for_position(others, position)
+    if any(abs(other.elo - new_score) < 1e-6 for other in others):
+        ordered = others[:position] + [dish] + others[position:]
+        total = len(ordered)
+        for index, item in enumerate(ordered):
+            item.elo = 1500 + (total - index) * 25
+            item.save(update_fields=["elo"])
+    else:
+        dish.elo = new_score
+        dish.save(update_fields=["elo"])
+    record_ranks(dish.category)

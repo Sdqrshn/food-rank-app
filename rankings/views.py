@@ -82,6 +82,17 @@ class DishViewSet(viewsets.ModelViewSet):
             "dish": DishSerializer(dish, context={"request": request}).data,
         })
 
+    @action(detail=True, methods=["post"])
+    def move(self, request, pk=None):
+        dish = self.get_object()
+        try:
+            position = int(request.data.get("position"))
+        except (TypeError, ValueError):
+            return Response({"error": "position must be a number"}, status=400)
+        placing.move_dish(dish, position)
+        dish.refresh_from_db()
+        return Response(DishSerializer(dish, context={"request": request}).data)
+
 def user_data(user):
     return {"id": user.id, "email": user.username, "display_name": user.first_name}
 
