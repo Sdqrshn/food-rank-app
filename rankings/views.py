@@ -5,7 +5,7 @@ from django.db import connection
 from django.db.models import Q
 from rest_framework import viewsets
 from .models import Category, Dish, PlacesUsage
-from django.db.models import F
+from django.db.models import F, Sum
 from .serializers import (
     CategorySerializer, DishSerializer, SignupSerializer, LoginSerializer,
     ProfileSerializer, ChangePasswordSerializer, SearchResultSerializer,
@@ -183,19 +183,45 @@ def search(request):
 PLACES_URL = "https://places.googleapis.com/v1/places:autocomplete"
 
 def allow_lookup():
-    limit = int(os.environ.get("PLACES_DAILY_LIMIT", "100"))
-    usage, _ = PlacesUsage.objects.get_or_create(day=timezone.localdate())
-    updated = PlacesUsage.objects.filter(pk=usage.pk, count__lt=limit).update(count=F("count") + 1)
+    daily = int(os.environ.get("PLACES_DAILY_LIMIT", "400"))
+    monthly = int(os.environ.get("PLACES_MONTHLY_LIMIT", "9000"))
+    today = timezone.localdate()
+    month_total = (
+        PlacesUsage.objects.filter(day__year=today.year, day__month=today.month)
+        .aggregate(total=Sum("count"))["total"] or 0
+    )
+    if month_total >= monthly:
+        return False
+    usage, _ = PlacesUsage.objects.get_or_create(day=today)
+    updated = PlacesUsage.objects.filter(pk=usage.pk, count__lt=daily).update(count=F("count") + 1)
     return updated == 1
 
 @api_view(["GET"])
 def place_suggestions(request):
     q = request.query_params.get("q", "").strip()
-    key = os.environ.get("GOOGLE_PLACES_API_KEY")
-    if len(q) < 3 or not key:
+    if len(q) < 3:
         return Response([])
 
-    if not allow_lookup():
+    if request.query_params.get("source") != "google":
+        rows = (
+            Dish.objects.filter(category__owner=request.user, restaurant__icontains=q)
+            .order_by("restaurant")
+            .values("restaurant", "place_id")
+            .distinct()
+        )
+        seen = {}
+        for row in rows:
+            name = row["restaurant"]
+            current = seen.get(name.lower())
+            if current is None or (row["place_id"] and not current["place_id"]):
+                seen[name.lower()] = {
+                    "place_id": row["place_id"], "name": name, "address": "", "saved": True,
+                }
+        if seen:
+            return Response(list(seen.values())[:5])
+
+    key = os.environ.get("GOOGLE_PLACES_API_KEY")
+    if not key or not allow_lookup():
         return Response([])
 
     try:
@@ -224,5 +250,6 @@ def place_suggestions(request):
             "place_id": prediction.get("placeId", ""),
             "name": text.get("mainText", {}).get("text", ""),
             "address": text.get("secondaryText", {}).get("text", ""),
+            "saved": False,
         })
     return Response(items[:5])

@@ -23,8 +23,8 @@ class CategorySerializer(serializers.ModelSerializer):
         return dish.restaurant if dish else None
 
     def get_top_photo(self, obj):
-        dish = obj.dishes.first()
-        if dish and dish.photo:
+        dish = obj.dishes.exclude(photo="").exclude(photo__isnull=True).first()
+        if dish:
             request = self.context.get("request")
             return request.build_absolute_uri(dish.photo.url) if request else dish.photo.url
         return None
