@@ -93,6 +93,17 @@ class DishViewSet(viewsets.ModelViewSet):
         dish.refresh_from_db()
         return Response(DishSerializer(dish, context={"request": request}).data)
 
+    @action(detail=False, methods=["post"])
+    def order(self, request):
+        category = Category.objects.filter(pk=request.data.get("category"), owner=request.user).first()
+        ids = request.data.get("order", [])
+        if not category or not isinstance(ids, list):
+            return Response({"error": "category and order are required"}, status=400)
+        if set(ids) != set(category.dishes.values_list("id", flat=True)):
+            return Response({"error": "order must list every dish in the category"}, status=400)
+        placing.apply_order(category, ids)
+        return Response({"ok": True})
+
 def user_data(user):
     return {"id": user.id, "email": user.username, "display_name": user.first_name}
 
