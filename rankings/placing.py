@@ -1,3 +1,4 @@
+from django.db.models import Min
 from .models import RankHistory
 
 def next_step(others, answers):
@@ -60,3 +61,10 @@ def apply_order(category, ordered_ids):
             if dish:
                 move_dish(dish, position, record=False)
     record_ranks(category)
+
+def bottom_score(category, exclude_pk=None):
+    dishes = category.dishes.all()
+    if exclude_pk:
+        dishes = dishes.exclude(pk=exclude_pk)
+    lowest = dishes.aggregate(lowest=Min("elo"))["lowest"]
+    return lowest - 25 if lowest is not None else 1500.0

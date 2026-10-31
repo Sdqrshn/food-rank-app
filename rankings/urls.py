@@ -5,6 +5,7 @@ from . import views
 router = DefaultRouter()
 router.register("categories", views.CategoryViewSet, basename="category")
 router.register("dishes", views.DishViewSet, basename="dish")
+router.register("to-eat", views.ToEatViewSet, basename="to-eat")
 
 urlpatterns = [
     path("hello/", views.hello),

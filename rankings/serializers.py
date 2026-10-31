@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from urllib.parse import quote
 
 from rest_framework import serializers
-from .models import Category, Dish, RankHistory
+from .models import Category, Dish, RankHistory, ToEatItem
 
 class CategorySerializer(serializers.ModelSerializer):
     dish_count = serializers.SerializerMethodField()
@@ -13,7 +13,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Category
-        fields = ["id", "name", "position", "dish_count", "top_dish", "top_photo"]
+        fields = ["id", "name", "position", "dish_count", "top_dish", "top_photo", "is_uncategorized"]
 
     def get_dish_count(self, obj):
         return obj.dishes.count()
@@ -31,6 +31,12 @@ class CategorySerializer(serializers.ModelSerializer):
 
     def validate_name(self, value):
         value = value.strip()
+        if self.instance and self.instance.is_uncategorized:
+            if value != self.instance.name:
+                raise serializers.ValidationError("Uncategorized can't be renamed.")
+            return value
+        if value.lower() == "uncategorized":
+            raise serializers.ValidationError("That name is reserved.")
         clash = Category.objects.filter(owner=self.context["request"].user, name__iexact=value)
         if self.instance:
             clash = clash.exclude(pk=self.instance.pk)
@@ -48,12 +54,13 @@ class DishSerializer(serializers.ModelSerializer):
     history = RankHistorySerializer(many=True, read_only=True)
     rank = serializers.SerializerMethodField()
     total = serializers.SerializerMethodField()
+    is_uncategorized = serializers.BooleanField(source="category.is_uncategorized", read_only=True)
 
     class Meta:
         model = Dish
         fields = ["id", "category", "name", "restaurant", "price", "note",
                   "date_tried", "map_link", "photo", "elo", "created_at",
-                  "rank", "total", "history", "place_id"]
+                  "rank", "total", "history", "place_id", "is_uncategorized"]
         read_only_fields = ["elo", "created_at"]
 
     def get_rank(self, obj):
@@ -146,3 +153,37 @@ class SearchResultSerializer(serializers.ModelSerializer):
 
     def get_note_snippet(self, obj):
         return make_snippet(obj.note, self.context.get("q", ""))
+
+class ToEatSerializer(serializers.ModelSerializer):
+    category_name = serializers.SerializerMethodField()
+    map_link = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ToEatItem
+        fields = ["id", "restaurant", "name", "note", "place_id", "category", "category_name",
+                  "map_link", "position", "created_at"]
+        read_only_fields = ["position", "created_at"]
+
+    def get_category_name(self, obj):
+        return obj.category.name if obj.category else ""
+
+    def get_map_link(self, obj):
+        if not obj.place_id:
+            return ""
+        return (
+            "https://www.google.com/maps/search/?api=1"
+            f"&query={quote(obj.restaurant)}&query_place_id={obj.place_id}"
+        )
+
+    def validate_restaurant(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Enter the restaurant.")
+        return value
+
+    def validate_category(self, value):
+        if value is None:
+            return None
+        if value.owner_id != self.context["request"].user.id:
+            raise serializers.ValidationError("That category is not yours.")
+        return None if value.is_uncategorized else value

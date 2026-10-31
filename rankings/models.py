@@ -11,9 +11,10 @@ class Category(models.Model):
     )
     name = models.CharField(max_length=60)
     position = models.PositiveIntegerField(default=0)
+    is_uncategorized = models.BooleanField(default=False)
 
     class Meta:
-        ordering = ["position", "id"]
+        ordering = ["is_uncategorized", "position", "id"]
         constraints = [
             models.UniqueConstraint(fields=["owner", "name"], name="unique_category_name_per_owner"),
         ]
@@ -56,3 +57,30 @@ def delete_dish_photo(sender, instance, **kwargs):
 class PlacesUsage(models.Model):
     day = models.DateField(unique=True)
     count = models.PositiveIntegerField(default=0)
+
+def get_uncategorized(user):
+    category, _ = Category.objects.get_or_create(
+        owner=user,
+        is_uncategorized=True,
+        defaults={"name": "Uncategorized", "position": 9999},
+    )
+    return category
+
+
+class ToEatItem(models.Model):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="to_eat_items")
+    restaurant = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, blank=True)
+    note = models.TextField(blank=True)
+    place_id = models.CharField(max_length=255, blank=True)
+    category = models.ForeignKey(
+        Category, null=True, blank=True, on_delete=models.SET_NULL, related_name="to_eat_items"
+    )
+    position = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "id"]
+
+    def __str__(self):
+        return self.restaurant

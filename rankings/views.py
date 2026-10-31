@@ -4,11 +4,11 @@ from django.contrib.auth.models import User
 from django.db import connection
 from django.db.models import Q
 from rest_framework import viewsets
-from .models import Category, Dish, PlacesUsage
+from .models import Category, Dish, PlacesUsage, ToEatItem, get_uncategorized
 from django.db.models import F, Sum
 from .serializers import (
     CategorySerializer, DishSerializer, SignupSerializer, LoginSerializer,
-    ProfileSerializer, ChangePasswordSerializer, SearchResultSerializer,
+    ProfileSerializer, ChangePasswordSerializer, SearchResultSerializer, ToEatSerializer
 )
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, action, permission_classes
@@ -28,10 +28,17 @@ class CategoryViewSet(viewsets.ModelViewSet):
     serializer_class = CategorySerializer
 
     def get_queryset(self):
-        return Category.objects.filter(owner=self.request.user)
+        categories = Category.objects.filter(owner=self.request.user)
+        if self.action == "list" and not self.request.query_params.get("all"):
+            categories = categories.exclude(is_uncategorized=True, dishes__isnull=True)
+        return categories
 
     def perform_create(self, serializer):
-        last = self.get_queryset().order_by("-position").first()
+        last = (
+            Category.objects.filter(owner=self.request.user, is_uncategorized=False)
+            .order_by("-position")
+            .first()
+        )
         serializer.save(owner=self.request.user, position=(last.position + 1) if last else 0)
 
     @action(detail=False, methods=["post"])
@@ -40,8 +47,13 @@ class CategoryViewSet(viewsets.ModelViewSet):
         if not isinstance(order, list):
             return Response({"error": "order must be a list of category ids"}, status=400)
         for position, category_id in enumerate(order):
-            self.get_queryset().filter(pk=category_id).update(position=position)
+            self.get_queryset().filter(pk=category_id, is_uncategorized=False).update(position=position)
         return Response({"ok": True})
+
+    @action(detail=False, methods=["get", "post"])
+    def uncategorized(self, request):
+        category = get_uncategorized(request.user)
+        return Response(CategorySerializer(category, context={"request": request}).data)
 
 class DishViewSet(viewsets.ModelViewSet):
     serializer_class = DishSerializer
@@ -52,6 +64,28 @@ class DishViewSet(viewsets.ModelViewSet):
         if category:
             dishes = dishes.filter(category_id=category)
         return dishes
+
+    def perform_create(self, serializer):
+        category = serializer.validated_data["category"]
+        extra = {"elo": placing.bottom_score(category)} if category.is_uncategorized else {}
+        serializer.save(**extra)
+        if category.is_uncategorized:
+            placing.record_ranks(category)
+        to_eat_id = self.request.data.get("to_eat")
+        if to_eat_id:
+            ToEatItem.objects.filter(pk=to_eat_id, owner=self.request.user).delete()
+
+    def perform_update(self, serializer):
+        old_category = serializer.instance.category
+        dish = serializer.save()
+        if dish.category_id != old_category.id:
+            if dish.category.is_uncategorized:
+                dish.elo = placing.bottom_score(dish.category, exclude_pk=dish.pk)
+            else:
+                dish.elo = 1500.0
+            dish.save(update_fields=["elo"])
+            placing.record_ranks(old_category)
+            placing.record_ranks(dish.category)
     
     def perform_destroy(self, instance):
         category = instance.category
@@ -275,3 +309,23 @@ def place_suggestions(request):
             "saved": False,
         })
     return Response(items[:5])
+
+class ToEatViewSet(viewsets.ModelViewSet):
+    serializer_class = ToEatSerializer
+
+    def get_queryset(self):
+        return ToEatItem.objects.filter(owner=self.request.user).select_related("category")
+
+    def perform_create(self, serializer):
+        last = self.get_queryset().order_by("-position").first()
+        serializer.save(owner=self.request.user, position=(last.position + 1) if last else 0)
+
+    @action(detail=False, methods=["post"])
+    def order(self, request):
+        ids = request.data.get("order", [])
+        items = list(self.get_queryset())
+        if not isinstance(ids, list) or set(ids) != {item.id for item in items}:
+            return Response({"error": "order must list every entry"}, status=400)
+        for position, item_id in enumerate(ids):
+            ToEatItem.objects.filter(pk=item_id, owner=request.user).update(position=position)
+        return Response({"ok": True})
