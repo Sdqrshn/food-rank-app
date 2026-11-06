@@ -73,9 +73,7 @@ class ToEatItem(models.Model):
     name = models.CharField(max_length=100, blank=True)
     note = models.TextField(blank=True)
     place_id = models.CharField(max_length=255, blank=True)
-    category = models.ForeignKey(
-        Category, null=True, blank=True, on_delete=models.SET_NULL, related_name="to_eat_items"
-    )
+    map_link = models.URLField(blank=True)
     position = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 

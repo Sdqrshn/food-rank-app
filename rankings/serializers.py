@@ -10,10 +10,11 @@ class CategorySerializer(serializers.ModelSerializer):
     dish_count = serializers.SerializerMethodField()
     top_dish = serializers.SerializerMethodField()
     top_photo = serializers.SerializerMethodField()
+    category_name = serializers.CharField(source="category.name", read_only=True)
 
     class Meta:
         model = Category
-        fields = ["id", "name", "position", "dish_count", "top_dish", "top_photo", "is_uncategorized"]
+        fields = ["id", "name", "category_name", "position", "dish_count", "top_dish", "top_photo", "is_uncategorized"]
 
     def get_dish_count(self, obj):
         return obj.dishes.count()
@@ -155,35 +156,23 @@ class SearchResultSerializer(serializers.ModelSerializer):
         return make_snippet(obj.note, self.context.get("q", ""))
 
 class ToEatSerializer(serializers.ModelSerializer):
-    category_name = serializers.SerializerMethodField()
-    map_link = serializers.SerializerMethodField()
 
     class Meta:
         model = ToEatItem
-        fields = ["id", "restaurant", "name", "note", "place_id", "category", "category_name",
-                  "map_link", "position", "created_at"]
+        fields = ["id", "restaurant", "name", "note", "place_id", "map_link", "position", "created_at"]
         read_only_fields = ["position", "created_at"]
 
-    def get_category_name(self, obj):
-        return obj.category.name if obj.category else ""
-
-    def get_map_link(self, obj):
-        if not obj.place_id:
-            return ""
-        return (
-            "https://www.google.com/maps/search/?api=1"
-            f"&query={quote(obj.restaurant)}&query_place_id={obj.place_id}"
-        )
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not data.get("map_link") and instance.place_id:
+            data["map_link"] = (
+                "https://www.google.com/maps/search/?api=1"
+                f"&query={quote(instance.restaurant)}&query_place_id={instance.place_id}"
+            )
+        return data
 
     def validate_restaurant(self, value):
         value = value.strip()
         if not value:
             raise serializers.ValidationError("Enter the restaurant.")
         return value
-
-    def validate_category(self, value):
-        if value is None:
-            return None
-        if value.owner_id != self.context["request"].user.id:
-            raise serializers.ValidationError("That category is not yours.")
-        return None if value.is_uncategorized else value

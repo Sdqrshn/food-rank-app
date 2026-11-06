@@ -18,6 +18,7 @@ from . import placing
 import os
 import requests
 from django.utils import timezone
+from urllib.parse import quote
 
 # Create your views here.
 @api_view(["GET"])
@@ -28,10 +29,16 @@ class CategoryViewSet(viewsets.ModelViewSet):
     serializer_class = CategorySerializer
 
     def get_queryset(self):
-        categories = Category.objects.filter(owner=self.request.user)
-        if self.action == "list" and not self.request.query_params.get("all"):
-            categories = categories.exclude(is_uncategorized=True, dishes__isnull=True)
-        return categories
+        return Category.objects.filter(owner=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        get_uncategorized(request.user)
+        return super().list(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if self.get_object().is_uncategorized:
+            return Response({"error": "Uncategorized can't be deleted."}, status=400)
+        return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         last = (
@@ -84,8 +91,8 @@ class DishViewSet(viewsets.ModelViewSet):
             else:
                 dish.elo = 1500.0
             dish.save(update_fields=["elo"])
+            dish.history.all().delete()
             placing.record_ranks(old_category)
-            placing.record_ranks(dish.category)
     
     def perform_destroy(self, instance):
         category = instance.category
@@ -252,6 +259,9 @@ def allow_lookup():
     updated = PlacesUsage.objects.filter(pk=usage.pk, count__lt=daily).update(count=F("count") + 1)
     return updated == 1
 
+def maps_link(name, place_id):
+    return f"https://www.google.com/maps/search/?api=1&query={quote(name)}&query_place_id={place_id}"
+
 @api_view(["GET"])
 def place_suggestions(request):
     q = request.query_params.get("q", "").strip()
@@ -262,16 +272,24 @@ def place_suggestions(request):
         rows = (
             Dish.objects.filter(category__owner=request.user, restaurant__icontains=q)
             .order_by("restaurant")
-            .values("restaurant", "place_id")
+            .values("restaurant", "place_id", "map_link")
+            .distinct()
+        )
+        entries = (
+            ToEatItem.objects.filter(owner=request.user, restaurant__icontains=q)
+            .order_by("restaurant")
+            .values("restaurant", "place_id", "map_link")
             .distinct()
         )
         seen = {}
-        for row in rows:
+        for row in list(rows) + list(entries):
             name = row["restaurant"]
+            link = row["map_link"] or (maps_link(name, row["place_id"]) if row["place_id"] else "")
             current = seen.get(name.lower())
-            if current is None or (row["place_id"] and not current["place_id"]):
+            if current is None or (link and not current["map_link"]):
                 seen[name.lower()] = {
-                    "place_id": row["place_id"], "name": name, "address": "", "saved": True,
+                    "place_id": row["place_id"], "map_link": link, "name": name,
+                    "address": "", "saved": True,
                 }
         if seen:
             return Response(list(seen.values())[:5])
@@ -302,9 +320,12 @@ def place_suggestions(request):
         if not prediction:
             continue
         text = prediction.get("structuredFormat", {})
+        name = text.get("mainText", {}).get("text", "")
+        place_id = prediction.get("placeId", "")
         items.append({
-            "place_id": prediction.get("placeId", ""),
-            "name": text.get("mainText", {}).get("text", ""),
+            "place_id": place_id,
+            "map_link": maps_link(name, place_id),
+            "name": name,
             "address": text.get("secondaryText", {}).get("text", ""),
             "saved": False,
         })
@@ -314,7 +335,7 @@ class ToEatViewSet(viewsets.ModelViewSet):
     serializer_class = ToEatSerializer
 
     def get_queryset(self):
-        return ToEatItem.objects.filter(owner=self.request.user).select_related("category")
+        return ToEatItem.objects.filter(owner=self.request.user)
 
     def perform_create(self, serializer):
         last = self.get_queryset().order_by("-position").first()

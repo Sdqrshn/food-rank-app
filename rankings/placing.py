@@ -30,6 +30,8 @@ def score_for_position(others, position):
     return above - 50
 
 def record_ranks(category):
+    if category.is_uncategorized:
+        return
     dishes = list(category.dishes.all())
     for position, dish in enumerate(dishes, start=1):
         last = dish.history.last()
