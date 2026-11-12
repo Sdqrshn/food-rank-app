@@ -19,6 +19,8 @@ import os
 import requests
 from django.utils import timezone
 from urllib.parse import quote
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 
 # Create your views here.
 @api_view(["GET"])
@@ -350,3 +352,54 @@ class ToEatViewSet(viewsets.ModelViewSet):
         for position, item_id in enumerate(ids):
             ToEatItem.objects.filter(pk=item_id, owner=request.user).update(position=position)
         return Response({"ok": True})
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def google_login(request):
+    client_id = os.environ.get("GOOGLE_CLIENT_ID")
+    credential = request.data.get("id_token", "")
+    if not client_id:
+        return Response({"error": "Google sign-in isn't set up on the server."}, status=500)
+    if not credential:
+        return Response({"error": "Missing Google token."}, status=400)
+    try:
+        info = google_id_token.verify_oauth2_token(
+            credential, google_requests.Request(), client_id, clock_skew_in_seconds=10
+        )
+    except ValueError:
+        return Response({"error": "Could not verify your Google account."}, status=400)
+
+    email = (info.get("email") or "").strip().lower()
+    if not email or not info.get("email_verified"):
+        return Response({"error": "Your Google email isn't verified."}, status=400)
+
+    user = User.objects.filter(username=email).first() or User.objects.filter(email__iexact=email).first()
+    if user is None:
+        name = (info.get("name") or email.split("@")[0]).strip()[:50]
+        user = User.objects.create_user(username=email, email=email, first_name=name)
+    if not user.is_active:
+        return Response({"error": "This account is disabled."}, status=400)
+
+    token, _ = Token.objects.get_or_create(user=user)
+    return Response({"token": token.key, "user": user_data(user)})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def delete_summary(request):
+    dishes = Dish.objects.filter(category__owner=request.user)
+    return Response({
+        "categories": Category.objects.filter(owner=request.user, is_uncategorized=False).count(),
+        "dishes": dishes.count(),
+        "photos": dishes.exclude(photo="").exclude(photo__isnull=True).count(),
+        "to_eat": ToEatItem.objects.filter(owner=request.user).count(),
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def delete_me(request):
+    if request.data.get("confirm") is not True:
+        return Response({"error": "Confirmation is required."}, status=400)
+    request.user.delete()
+    return Response({"ok": True})
